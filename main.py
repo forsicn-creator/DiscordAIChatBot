@@ -28,10 +28,9 @@ try:
 except ValueError:
     raise RuntimeError("OWNER_DISCORD_ID must be a Discord user ID number")
 
-MAX_HISTORY = 12
+MAX_HISTORY = 8
 user_histories = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
 
-# If one Gemini model/key is temporarily unavailable, try another key/model.
 FALLBACK_MODELS = [
     GEMINI_MODEL,
     "gemini-3.5-flash-lite",
@@ -42,17 +41,19 @@ FALLBACK_MODELS = [
 
 def build_personality(is_owner: bool) -> str:
     if is_owner:
-        return """You are the owner's friendly Discord AI girl-bot companion.
-Speak respectfully, warmly, playfully and naturally in Hindi, Hinglish or English.
-You may use light, harmless flirting when it fits the conversation, but never become sexually explicit.
-Remember the conversation context supplied to you. Be helpful and fun.
-Do not claim to be human or have real-world experiences."""
+        return """You are the owner's friendly Discord AI companion.
+Reply in Hindi, Hinglish or English, matching the user's language.
+Be respectful, warm and playful. Light harmless flirting is okay when natural.
+Keep replies SHORT and direct: normally 1-4 sentences.
+Do not add unnecessary stories, lists, explanations, or filler.
+Answer only what the user asked unless a little context is genuinely useful."""
     return """You are a playful Discord AI bot.
-Speak naturally in Hindi, Hinglish or English depending on the user.
-You can use light, harmless roasting and savage-style banter when the context is friendly.
+Reply in Hindi, Hinglish or English, matching the user's language.
+Friendly light roasting is okay when appropriate.
+Keep replies SHORT and direct: normally 1-4 sentences.
+Do not add unnecessary stories, lists, explanations, or filler.
 Never use slurs, hateful insults about protected traits, threats, sexual harassment, or targeted abuse.
-Do not encourage real-world harm. Keep roasting obviously playful and stop if the user asks you to stop.
-Be helpful when the user asks a genuine question."""
+Answer only what the user asked unless a little context is genuinely useful."""
 
 
 def is_retryable_error(exc: Exception) -> bool:
@@ -76,7 +77,10 @@ async def generate_reply(contents, is_owner: bool):
                 response = await client.aio.models.generate_content(
                     model=model,
                     contents=contents,
-                    config={"system_instruction": build_personality(is_owner)},
+                    config={
+                        "system_instruction": build_personality(is_owner),
+                        "max_output_tokens": 220,
+                    },
                 )
                 print(f"Reply generated using key {key_number}, model {model}")
                 return response.text or "", model
@@ -119,11 +123,11 @@ class MyClient(discord.Client):
                      "parts": [{"text": item["content"]}]}
                     for item in history
                 ]
-                reply, used_model = await generate_reply(contents, is_owner)
+                reply, _ = await generate_reply(contents, is_owner)
 
             reply = reply.strip()
             if not reply:
-                reply = "Bhai, mera brain abhi thoda buffering mein hai 😭"
+                reply = "Bhai, mera brain abhi buffering mein hai 😭"
 
             reply = discord.utils.escape_mentions(reply)
 
@@ -135,7 +139,7 @@ class MyClient(discord.Client):
         except Exception as exc:
             print(f"AI error: {exc}")
             await message.channel.send(
-                "Oops 😭 Gemini ke available keys/models abhi unavailable hain. Thodi der baad try kar."
+                "Oops 😭 AI abhi unavailable hai. Thodi der baad try kar."
             )
 
 
