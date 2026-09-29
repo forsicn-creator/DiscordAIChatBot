@@ -3,26 +3,26 @@ from collections import defaultdict, deque
 
 import discord
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from google import genai
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OWNER_DISCORD_ID = os.getenv("OWNER_DISCORD_ID")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from .env")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is missing from .env")
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY is missing from .env")
 
 try:
     OWNER_DISCORD_ID = int(OWNER_DISCORD_ID) if OWNER_DISCORD_ID else None
 except ValueError:
     raise RuntimeError("OWNER_DISCORD_ID must be a Discord user ID number")
 
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+ai = genai.Client(api_key=GEMINI_API_KEY)
 
 MAX_HISTORY = 12
 user_histories = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
@@ -68,13 +68,18 @@ class MyClient(discord.Client):
 
         try:
             async with message.channel.typing():
-                response = await openai_client.responses.create(
-                    model=OPENAI_MODEL,
-                    instructions=build_personality(is_owner),
-                    input=list(history),
+                contents = [
+                    {"role": "user" if item["role"] == "user" else "model",
+                     "parts": [{"text": item["content"]}]}
+                    for item in history
+                ]
+                response = await ai.aio.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=contents,
+                    config={"system_instruction": build_personality(is_owner)},
                 )
 
-            reply = (response.output_text or "").strip()
+            reply = (response.text or "").strip()
             if not reply:
                 reply = "Bhai, mera brain abhi thoda buffering mein hai 😭"
 
