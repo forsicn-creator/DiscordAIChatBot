@@ -1,4 +1,5 @@
 import os
+import re
 from collections import defaultdict, deque
 
 import discord
@@ -38,6 +39,13 @@ FALLBACK_MODELS = [
     "gemini-3.7-flash",
 ]
 
+ALLOWED_MENTIONS = discord.AllowedMentions(
+    users=True,
+    roles=False,
+    everyone=False,
+    replied_user=False,
+)
+
 
 def build_personality(is_owner: bool) -> str:
     if is_owner:
@@ -47,7 +55,8 @@ Be respectful, warm, playful and natural. Light harmless flirting is okay when n
 Write complete, natural conversational replies, usually 2-6 sentences.
 Do not abruptly stop, trail off, or leave a thought unfinished.
 Be concise without sounding robotic. Avoid unnecessary stories, long lists, repetition, or filler.
-Answer what the user asked and add a little useful context when it makes the conversation feel natural."""
+You may mention Discord members with their exact Discord mention format <@USER_ID> when it is appropriate and the user is clearly asking about or addressing that person.
+Never mention @everyone or @here."""
     return """You are a playful Discord AI bot.
 Reply in Hindi, Hinglish or English, matching the user's language.
 Friendly light roasting is okay when appropriate.
@@ -55,7 +64,15 @@ Write complete, natural conversational replies, usually 2-6 sentences.
 Do not abruptly stop, trail off, or leave a thought unfinished.
 Be concise without sounding robotic. Avoid unnecessary stories, long lists, repetition, or filler.
 Never use slurs, hateful insults about protected traits, threats, sexual harassment, or targeted abuse.
-Answer what the user asked and add a little useful context when it makes the conversation feel natural."""
+You may mention Discord members with their exact Discord mention format <@USER_ID> when it is appropriate and the user is clearly asking about or addressing that person.
+Never mention @everyone or @here."""
+
+
+def sanitize_dangerous_mentions(text: str) -> str:
+    text = text.replace("@everyone", "@\u200beveryone")
+    text = text.replace("@here", "@\u200bhere")
+    text = re.sub(r"<@&(\d+)>", r"<@&\u200b\1>", text)
+    return text
 
 
 def is_retryable_error(exc: Exception) -> bool:
@@ -131,17 +148,21 @@ class MyClient(discord.Client):
             if not reply:
                 reply = "Bhai, mera brain abhi buffering mein hai 😭"
 
-            reply = discord.utils.escape_mentions(reply)
+            reply = sanitize_dangerous_mentions(reply)
 
             for start in range(0, len(reply), 1900):
-                await message.channel.send(reply[start:start + 1900])
+                await message.channel.send(
+                    reply[start:start + 1900],
+                    allowed_mentions=ALLOWED_MENTIONS,
+                )
 
             history.append({"role": "assistant", "content": reply})
 
         except Exception as exc:
             print(f"AI error: {exc}")
             await message.channel.send(
-                "Oops 😭 AI abhi unavailable hai. Thodi der baad try kar."
+                "Oops 😭 AI abhi unavailable hai. Thodi der baad try kar.",
+                allowed_mentions=ALLOWED_MENTIONS,
             )
 
 
