@@ -1,5 +1,4 @@
 import os
-import re
 from collections import defaultdict, deque
 
 import discord
@@ -71,7 +70,6 @@ Never mention @everyone or @here."""
 def sanitize_dangerous_mentions(text: str) -> str:
     text = text.replace("@everyone", "@\u200beveryone")
     text = text.replace("@here", "@\u200bhere")
-    text = re.sub(r"<@&(\d+)>", r"<@&\u200b\1>", text)
     return text
 
 
