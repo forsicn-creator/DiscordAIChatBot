@@ -1,4 +1,5 @@
 import os
+import re
 from collections import defaultdict, deque
 
 import discord
@@ -46,31 +47,47 @@ ALLOWED_MENTIONS = discord.AllowedMentions(
 )
 
 
-def build_personality(is_owner: bool) -> str:
+def build_personality(is_owner: bool, allowed_user_ids: set[int]) -> str:
+    mention_rule = (
+        "You may mention ONLY these Discord user IDs: "
+        + ", ".join(str(user_id) for user_id in sorted(allowed_user_ids))
+        + ". Copy their exact <@USER_ID> format when mentioning them."
+        if allowed_user_ids
+        else
+        "There are no target member mentions available in this message. Do not invent any Discord user ID or <@USER_ID> mention."
+    )
+
     if is_owner:
-        return """You are the owner's friendly Discord AI companion.
+        return f"""You are the owner's friendly Discord AI companion.
 Reply in Hindi, Hinglish or English, matching the user's language.
 Be respectful, warm, playful and natural. Light harmless flirting is okay when natural.
 Write complete, natural conversational replies, usually 2-6 sentences.
 Do not abruptly stop, trail off, or leave a thought unfinished.
 Be concise without sounding robotic. Avoid unnecessary stories, long lists, repetition, or filler.
-You may mention Discord members with their exact Discord mention format <@USER_ID> when it is appropriate and the user is clearly asking about or addressing that person.
+{mention_rule}
 Never mention @everyone or @here."""
-    return """You are a playful Discord AI bot.
+    return f"""You are a playful Discord AI bot.
 Reply in Hindi, Hinglish or English, matching the user's language.
 Friendly light roasting is okay when appropriate.
 Write complete, natural conversational replies, usually 2-6 sentences.
 Do not abruptly stop, trail off, or leave a thought unfinished.
 Be concise without sounding robotic. Avoid unnecessary stories, long lists, repetition, or filler.
 Never use slurs, hateful insults about protected traits, threats, sexual harassment, or targeted abuse.
-You may mention Discord members with their exact Discord mention format <@USER_ID> when it is appropriate and the user is clearly asking about or addressing that person.
+{mention_rule}
 Never mention @everyone or @here."""
 
 
-def sanitize_dangerous_mentions(text: str) -> str:
+def sanitize_mentions(text: str, allowed_user_ids: set[int]) -> str:
     text = text.replace("@everyone", "@\u200beveryone")
     text = text.replace("@here", "@\u200bhere")
-    return text
+
+    def replace_unknown(match: re.Match) -> str:
+        user_id = int(match.group(1))
+        if user_id in allowed_user_ids:
+            return match.group(0)
+        return "@member"
+
+    return re.sub(r"<@!?(\d+)>", replace_unknown, text)
 
 
 def is_retryable_error(exc: Exception) -> bool:
@@ -83,8 +100,9 @@ def is_retryable_error(exc: Exception) -> bool:
     )
 
 
-async def generate_reply(contents, is_owner: bool):
+async def generate_reply(contents, is_owner: bool, allowed_user_ids: set[int]):
     last_error = None
+    system_instruction = build_personality(is_owner, allowed_user_ids)
 
     for key_number, api_key in enumerate(GEMINI_API_KEYS, start=1):
         client = genai.Client(api_key=api_key)
@@ -95,7 +113,7 @@ async def generate_reply(contents, is_owner: bool):
                     model=model,
                     contents=contents,
                     config={
-                        "system_instruction": build_personality(is_owner),
+                        "system_instruction": system_instruction,
                         "max_output_tokens": 600,
                     },
                 )
@@ -127,6 +145,11 @@ class MyClient(discord.Client):
         if not prompt:
             prompt = "Say hi and ask what I need."
 
+        allowed_user_ids = {
+            member.id for member in message.mentions
+            if member.id != self.user.id
+        }
+
         user_id = message.author.id
         is_owner = OWNER_DISCORD_ID == user_id
         history = user_histories[user_id]
@@ -140,13 +163,13 @@ class MyClient(discord.Client):
                      "parts": [{"text": item["content"]}]}
                     for item in history
                 ]
-                reply, _ = await generate_reply(contents, is_owner)
+                reply, _ = await generate_reply(contents, is_owner, allowed_user_ids)
 
             reply = reply.strip()
             if not reply:
                 reply = "Bhai, mera brain abhi buffering mein hai 😭"
 
-            reply = sanitize_dangerous_mentions(reply)
+            reply = sanitize_mentions(reply, allowed_user_ids)
 
             for start in range(0, len(reply), 1900):
                 await message.channel.send(
