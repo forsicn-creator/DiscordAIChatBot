@@ -27,6 +27,14 @@ ai = genai.Client(api_key=GEMINI_API_KEY)
 MAX_HISTORY = 12
 user_histories = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
 
+# If one Gemini model is temporarily busy, try the next available model.
+FALLBACK_MODELS = [
+    GEMINI_MODEL,
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+]
+
 
 def build_personality(is_owner: bool) -> str:
     if is_owner:
@@ -41,6 +49,40 @@ You can use light, harmless roasting and savage-style banter when the context is
 Never use slurs, hateful insults about protected traits, threats, sexual harassment, or targeted abuse.
 Do not encourage real-world harm. Keep roasting obviously playful and stop if the user asks you to stop.
 Be helpful when the user asks a genuine question."""
+
+
+def is_temporary_capacity_error(exc: Exception) -> bool:
+    error_text = str(exc).upper()
+    return "503" in error_text or "UNAVAILABLE" in error_text
+
+
+async def generate_reply(contents, is_owner: bool):
+    last_error = None
+    tried = set()
+
+    for model in FALLBACK_MODELS:
+        if not model or model in tried:
+            continue
+        tried.add(model)
+
+        for attempt in range(2):
+            try:
+                response = await ai.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config={"system_instruction": build_personality(is_owner)},
+                )
+                return response.text or "", model
+            except Exception as exc:
+                last_error = exc
+                if not is_temporary_capacity_error(exc):
+                    raise
+                if attempt == 0:
+                    print(f"Gemini capacity issue on {model}; retrying once...")
+
+        print(f"Gemini model unavailable: {model}")
+
+    raise last_error if last_error else RuntimeError("No Gemini model is configured")
 
 
 class MyClient(discord.Client):
@@ -73,17 +115,15 @@ class MyClient(discord.Client):
                      "parts": [{"text": item["content"]}]}
                     for item in history
                 ]
-                response = await ai.aio.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=contents,
-                    config={"system_instruction": build_personality(is_owner)},
-                )
+                reply, used_model = await generate_reply(contents, is_owner)
 
-            reply = (response.text or "").strip()
+            reply = reply.strip()
             if not reply:
                 reply = "Bhai, mera brain abhi thoda buffering mein hai 😭"
 
             reply = discord.utils.escape_mentions(reply)
+
+            print(f"Reply generated using {used_model}")
 
             for start in range(0, len(reply), 1900):
                 await message.channel.send(reply[start:start + 1900])
@@ -93,7 +133,7 @@ class MyClient(discord.Client):
         except Exception as exc:
             print(f"AI error: {exc}")
             await message.channel.send(
-                "Oops 😭 AI se connection mein problem aa gayi. Thodi der baad try kar."
+                "Oops 😭 Gemini ke saare available models abhi busy hain. Thodi der baad try kar."
             )
 
 
