@@ -8,26 +8,30 @@ from google import genai
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OWNER_DISCORD_ID = os.getenv("OWNER_DISCORD_ID")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
+GEMINI_API_KEYS = [
+    os.getenv("GEMINI_API_KEY_1"),
+    os.getenv("GEMINI_API_KEY_2"),
+    os.getenv("GEMINI_API_KEY_3"),
+]
+GEMINI_API_KEYS = [key for key in GEMINI_API_KEYS if key]
+
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from .env")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing from .env")
+if not GEMINI_API_KEYS:
+    raise RuntimeError("At least one GEMINI_API_KEY_1/2/3 is required")
 
 try:
     OWNER_DISCORD_ID = int(OWNER_DISCORD_ID) if OWNER_DISCORD_ID else None
 except ValueError:
     raise RuntimeError("OWNER_DISCORD_ID must be a Discord user ID number")
 
-ai = genai.Client(api_key=GEMINI_API_KEY)
-
 MAX_HISTORY = 12
 user_histories = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
 
-# If one Gemini model is temporarily busy, try the next available model.
+# If one Gemini model/key is temporarily unavailable, try another key/model.
 FALLBACK_MODELS = [
     GEMINI_MODEL,
     "gemini-3.5-flash-lite",
@@ -51,38 +55,38 @@ Do not encourage real-world harm. Keep roasting obviously playful and stop if th
 Be helpful when the user asks a genuine question."""
 
 
-def is_temporary_capacity_error(exc: Exception) -> bool:
+def is_retryable_error(exc: Exception) -> bool:
     error_text = str(exc).upper()
-    return "503" in error_text or "UNAVAILABLE" in error_text
+    return (
+        "503" in error_text
+        or "UNAVAILABLE" in error_text
+        or "429" in error_text
+        or "RESOURCE_EXHAUSTED" in error_text
+    )
 
 
 async def generate_reply(contents, is_owner: bool):
     last_error = None
-    tried = set()
 
-    for model in FALLBACK_MODELS:
-        if not model or model in tried:
-            continue
-        tried.add(model)
+    for key_number, api_key in enumerate(GEMINI_API_KEYS, start=1):
+        client = genai.Client(api_key=api_key)
 
-        for attempt in range(2):
+        for model in FALLBACK_MODELS:
             try:
-                response = await ai.aio.models.generate_content(
+                response = await client.aio.models.generate_content(
                     model=model,
                     contents=contents,
                     config={"system_instruction": build_personality(is_owner)},
                 )
+                print(f"Reply generated using key {key_number}, model {model}")
                 return response.text or "", model
             except Exception as exc:
                 last_error = exc
-                if not is_temporary_capacity_error(exc):
+                if not is_retryable_error(exc):
                     raise
-                if attempt == 0:
-                    print(f"Gemini capacity issue on {model}; retrying once...")
+                print(f"Key {key_number} / model {model} unavailable; trying next option...")
 
-        print(f"Gemini model unavailable: {model}")
-
-    raise last_error if last_error else RuntimeError("No Gemini model is configured")
+    raise last_error if last_error else RuntimeError("No Gemini API key is configured")
 
 
 class MyClient(discord.Client):
@@ -123,8 +127,6 @@ class MyClient(discord.Client):
 
             reply = discord.utils.escape_mentions(reply)
 
-            print(f"Reply generated using {used_model}")
-
             for start in range(0, len(reply), 1900):
                 await message.channel.send(reply[start:start + 1900])
 
@@ -133,7 +135,7 @@ class MyClient(discord.Client):
         except Exception as exc:
             print(f"AI error: {exc}")
             await message.channel.send(
-                "Oops 😭 Gemini ke saare available models abhi busy hain. Thodi der baad try kar."
+                "Oops 😭 Gemini ke available keys/models abhi unavailable hain. Thodi der baad try kar."
             )
 
 
