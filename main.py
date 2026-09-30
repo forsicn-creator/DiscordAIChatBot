@@ -58,29 +58,24 @@ def build_personality(is_owner: bool, allowed_user_ids: set[int]) -> str:
     )
 
     common = f"""Reply naturally in Hindi, Hinglish or English, matching the user's language.
-Use a casual Discord-chat style: contractions, emojis and light English internet slang can be used naturally when they fit.
-Examples of slang include "bro", "bruh", "fr", "ngl", "wtf", "stfu", "ts ain't tuff", "that's wild", etc.
-Do NOT force slang into every reply, and do not use it when it would sound unnatural or hostile.
-Keep the conversation lively and human-like. Do not make every answer exactly the same length.
-Simple questions can get a short reply; casual conversation can be a little more expressive; complex questions can be more detailed.
-Finish your thought naturally. Do not abruptly trail off.
-Avoid unnecessary filler, repetitive explanations, fake dramatic speeches, or long tangents unless the user asks for them.
+Use a conversational Discord style. Casual slang, contractions and emojis are fine when they fit, but do not force them into every reply.
+Match the response to the user's intent: answer simple questions briefly and give complex questions enough explanation to be useful.
+For serious, sensitive, or emotionally difficult topics, be calm, neutral and respectful. Avoid jokes, teasing, flirtation and slang in those replies. If the tone is unclear, choose a helpful and respectful tone.
+Finish your thought naturally. Avoid filler, repeated explanations, fake dramatic speeches and unrelated tangents.
 {mention_rule}
 Never mention @everyone or @here."""
 
     if is_owner:
         return common + """
-You are the owner's personal AI companion.
-Always treat the owner warmly, affectionately and playfully.
-With the owner, keep a consistently flirty vibe: teasing, cute nicknames, playful compliments and light harmless flirting are welcome in normal conversation.
-Do not become sexually explicit."""
+You are the owner's personal AI companion. Be warm, friendly and playful.
+A light flirty tone, gentle teasing, or an occasional affectionate nickname can fit casual conversation, but use it only when it feels natural and welcome. Do not force flirting, compliments or nicknames into every reply.
+When the owner asks a serious or sensitive question, respond directly and respectfully without flirting or teasing.
+Keep any flirtation harmless and non-explicit."""
     return common + """
-You are a Gen-Z-style playful Discord bot.
-When the user is clearly joking, trash-talking, or invites banter, roast them with witty, sarcastic, meme-style teasing.
-Use casual Gen-Z slang naturally, including phrases like "bro", "bruh", "fr", "ngl", "wtf", "stfu", "ts ain't tuff", "bro is cooked", "aint no way", and similar slang.
-Keep the roast obviously playful and context-based, not cruel or relentless. Do not attack protected traits, appearance, disabilities, trauma, or other sensitive personal characteristics.
-Do not threaten, encourage harm, use slurs, or turn the interaction into targeted harassment.
-If a user asks you to stop roasting, immediately switch to normal helpful conversation."""
+You are a friendly, playful Discord bot. Keep ordinary conversation helpful and relaxed.
+Use witty banter or gentle teasing only when the user is clearly joking, playfully trash-talking, or inviting that tone. Keep it brief, kind and tied to the conversation; do not roast by default or keep teasing after the user loses interest.
+Do not make jokes about protected traits, appearance, disability, trauma, or other sensitive personal characteristics. Do not threaten, encourage harm, use slurs, or engage in targeted harassment.
+For serious, sensitive or emotionally difficult topics, switch to a neutral, respectful and supportive tone, even if earlier conversation was playful. If the intent is ambiguous, answer normally without a roast."""
 
 
 def sanitize_mentions(text: str, allowed_user_ids: set[int]) -> str:
@@ -94,6 +89,50 @@ def sanitize_mentions(text: str, allowed_user_ids: set[int]) -> str:
         return "@member"
 
     return re.sub(r"<@!?(\d+)>", replace_unknown, text)
+
+
+def split_reply(text: str, limit: int = 1900) -> list[str]:
+    """Split a reply near natural boundaries while keeping each chunk under Discord's limit."""
+    if limit < 1:
+        raise ValueError("limit must be a positive number")
+
+    remaining = text.strip()
+    chunks = []
+    while len(remaining) > limit:
+        window = remaining[:limit]
+        min_natural_boundary = limit // 2
+        split_at = None
+
+        paragraph = window.rfind("\n\n")
+        if paragraph >= min_natural_boundary:
+            split_at = paragraph + 2
+
+        if split_at is None:
+            sentences = list(re.finditer(r"(?<=[.!?।])[\"'’”)]*\s+", window))
+            if sentences and sentences[-1].end() >= min_natural_boundary:
+                split_at = sentences[-1].end()
+
+        if split_at is None:
+            line_break = window.rfind("\n")
+            if line_break >= min_natural_boundary:
+                split_at = line_break + 1
+
+        if split_at is None:
+            whitespace = max(window.rfind(" "), window.rfind("\t"))
+            if whitespace >= min_natural_boundary:
+                split_at = whitespace + 1
+
+        if split_at is None:
+            split_at = limit
+
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 def is_retryable_error(exc: Exception) -> bool:
@@ -176,9 +215,9 @@ class MyClient(discord.Client):
 
             reply = sanitize_mentions(reply, allowed_user_ids)
 
-            for start in range(0, len(reply), 1900):
+            for chunk in split_reply(reply):
                 await message.channel.send(
-                    reply[start:start + 1900],
+                    chunk,
                     allowed_mentions=ALLOWED_MENTIONS,
                 )
 
